@@ -2,11 +2,11 @@
 
 **Deployed link:** [Open Linkly](https://urlshortener-1-2fnf.onrender.com/#links)
 
-A responsive FastAPI link workspace with Light, Dark, and System themes, custom aliases, campaign links, expiry, QR downloads, bulk shortening, private daily analytics, titles and tags, pause/resume, searchable pagination, CSV export, and private management sessions.
+A responsive FastAPI link workspace with a clean light interface, custom aliases, campaign links, expiry, QR downloads, bulk shortening, private daily analytics, titles and tags, pause/resume, searchable pagination, CSV export, and private management sessions.
 
 ## What’s new
 
-- **Light / Dark / System:** choose a theme in the header. Only the theme preference is stored locally; System follows your device automatically. Storage-blocked browsers still work.
+- **Light interface:** consistent light styling across the app, including dialogs and unavailable-link pages.
 - **A complete link library:** search by destination, alias, title, or tag across the entire database. Filter by active, paused, or expired status and tag; sort and navigate 20 links per page. Summary totals cover the entire library. CSV exports the currently displayed page, clearly labelled in the interface.
 - **Titles and tags:** select Edit on a link to give it a memorable name and a tag. These remain private.
 - **Pause / Resume:** temporarily stop redirects without deleting the address, title, or click history. Resuming respects existing expiry; edit expiry separately to reactivate an expired link. Paused links return the same generic 404 as unavailable links.

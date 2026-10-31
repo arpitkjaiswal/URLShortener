@@ -4,12 +4,6 @@
   --paper: #fff; --bg: #f5f7f0; --lime: #d7ed92; --soft: #edf5e5;
   --button-ink: #fff; --danger: #a3322a; --danger-bg: #fbefea; --shadow: #1933280a;
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --ink: #edf5ed; --green: #bde895; --muted: #aebeb3; --line: #37483e;
-  --paper: #1b2922; --bg: #111c16; --lime: #d7ed92; --soft: #283c2d;
-  --button-ink: #142318; --danger: #ffb4a8; --danger-bg: #422924; --shadow: #0003;
-}
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 24px; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
@@ -33,8 +27,6 @@ small { display: block; color: var(--muted); font-size: 12px; margin-top: 7px; }
 .dot { margin-left: -10px; }
 nav { display: flex; align-items: center; gap: 26px; }
 nav a { font-size: 13px; text-decoration: none; }
-.theme-picker { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 11px; color: var(--muted); }
-.theme-picker select { width: 102px; padding: 8px; font-size: 12px; }
 .hero { display: grid; grid-template-columns: 1.25fr 1fr; align-items: center; gap: 60px; padding: 68px 0 58px; }
 .eyebrow { font-size: 10px; font-weight: 750; letter-spacing: 2px; color: var(--green); margin: 0 0 14px; }
 h1 { font-size: clamp(44px, 5.5vw, 68px); line-height: 1.08; letter-spacing: -3px; font-weight: 650; margin: 0; }
@@ -141,8 +133,6 @@ dialog dd { margin: 3px 0; overflow-wrap: anywhere; }
   .topbar { min-height: 86px; gap: 12px; }
   nav { gap: 12px; }
   nav a { font-size: 11px; }
-  .nav-extra, .theme-picker span { display: none; }
-  .theme-picker select { width: 82px; }
   .brand { font-size: 25px; gap: 6px; }
   .brand-icon { width: 29px; height: 29px; font-size: 23px; }
   .dot { margin-left: -6px; }
