@@ -12,6 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.database import create_engine_for_database, create_session_factory, init_db
 from app.utils.cache import create_cache
+from app.core.security import AccessControl, SecurityMiddleware
 
 
 
@@ -27,9 +28,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="URL Shortener",
+        docs_url=None, redoc_url=None, openapi_url=None,
         version="1.0.0",
         description="A clean-architecture URL shortening service.",
     )
+    app.add_middleware(SecurityMiddleware)
+    app.state.access = AccessControl()
     app.state.settings = active_settings
     app.state.session_factory = session_factory
     app.state.url_cache = create_cache(active_settings.redis_url, ttl_seconds=300)

@@ -14,8 +14,14 @@ def is_valid_url(url: str) -> bool:
     if not url or not url.strip():
         return False
 
+    candidate = url.strip()
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in candidate) or "\\" in candidate:
+        return False
     try:
-        parsed = urlsplit(url.strip())
+        parsed = urlsplit(candidate)
+        _ = parsed.port
+        if parsed.username is not None or parsed.password is not None:
+            return False
     except ValueError:
         return False
 

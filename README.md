@@ -1,6 +1,6 @@
 # Linkly · URL Shortener
 
-A responsive FastAPI link shortener with custom aliases, expiry, QR downloads, click analytics, search, CSV export, and protected management actions.
+A responsive FastAPI link shortener with custom aliases, expiry, QR downloads, click analytics, search, filters, sorting, CSV export, link editing, and private management sessions.
 
 ## Develop locally
 
@@ -13,7 +13,7 @@ cp .env.example .env
 .venv/bin/uvicorn app.main:app --reload
 ```
 
-Open the app on port 8000. SQLite is used locally. Set `ADMIN_TOKEN` to a private access key in `.env` before exposing the service publicly. The dashboard’s **Management access** section accepts this key; it stays in the current tab’s memory and clears on reload. Public visitors can create short links, download QR codes, and follow links. Listing, analytics, and deletion require the key when configured. This is a single-owner dashboard, not a multi-user account system.
+Open the app on port 8000. SQLite is used locally. Set `ADMIN_TOKEN` to a long, random private access key in `.env` (at least 32 random characters recommended). Management stays locked if it is missing. The dashboard’s **Management access** section exchanges this key for a 30-minute HttpOnly, SameSite=Strict session cookie; the key is not stored in browser storage. HTTPS deployments use Secure cookies. Login survives reload until expiry; **Lock dashboard** revokes the session, clears the private view, and locks other open tabs. Public visitors can create short links, download QR codes, and follow links. Listing, analytics, editing, and deletion always require authorization. This is a single-owner dashboard, not a multi-user account system.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q
@@ -47,7 +47,7 @@ The free `.onrender.com` domain works as-is. An optional custom domain can use `
 | --- | --- |
 | `DATABASE_URL` | SQLite locally; free Neon PostgreSQL connection string in Render. `postgres://` and `postgresql://` select the installed psycopg driver. |
 | `BASE_URL` | Optional public origin; overrides `RENDER_EXTERNAL_URL`. Local default: `http://localhost:8000`. |
-| `ADMIN_TOKEN` | Private key protecting all list, stats, and delete endpoints. Unset means open management for local development. |
+| `ADMIN_TOKEN` | Private key protecting all list, stats, edit, and delete endpoints. Management stays locked when unset; use Render’s Generate option. |
 | `LOG_LEVEL` | Defaults to `INFO`. |
 | `REDIS_URL` | Optional Redis cache; not required for the single-worker Blueprint. |
 
@@ -58,11 +58,25 @@ The free `.onrender.com` domain works as-is. An optional custom domain can use `
 - `GET /api/v1/qr/{short_code}`: SVG QR download without recording a click.
 - `GET /api/v1/urls?limit=50`: recent links, newest first (maximum 50).
 - `GET /api/v1/stats/{short_code}`: clicks, creation, expiry, and last access for active links.
+- `PATCH /api/v1/urls/{short_code}`: update destination and optionally reset expiry (`ttl_seconds: null` removes expiry; omit it to preserve expiry). Keeps the short code and click history.
 - `DELETE /api/v1/urls/{short_code}`: permanent deletion with cache invalidation.
 - `GET /health`: database-aware health probe.
-- `/docs`: interactive API reference. For protected endpoints, supply the `X-Admin-Token` header.
+- `POST /api/v1/auth/login`: `{ "key": "your-private-management-key" }` creates a 30-minute browser session.
+- `GET /api/v1/auth/session`: remaining session lifetime.
+- `POST /api/v1/auth/logout`: revoke the current session.
+
+API clients can supply `X-Admin-Token` for protected endpoints. Browser sessions use cookies; session-based writes require an `Origin` header matching the configured public `BASE_URL`. For custom domains, configure `BASE_URL` to match the address used in the browser. Public Swagger/OpenAPI endpoints are disabled; the API contract is documented here.
 
 Dashboard search, totals, and CSV export cover the latest 50 loaded links. Expired links stay visible in the list; active-link insights include last access. QR codes are generated locally by the server, without sending link data to an external QR service. Destination URLs are rendered as text rather than HTML. CSV cells are escaped to avoid spreadsheet formula execution.
+
+## Privacy and abuse controls
+
+- Private management fails closed without a key. Requests without authentication never return your link list or analytics. Session tokens are random, stored as hashes in bounded server memory, expire after 30 minutes, and are revoked on logout, key rotation, or process restart. No new database tables or paid services are required.
+- Login: 5 attempts per client per minute. Failed management authentication: 10 attempts per client per minute. Public creation: 20 per client per minute. QR generation: 60 per client per minute. Limits return HTTP 429 with `Retry-After`.
+- Limits and sessions are local to the single worker. They reset on restart and are not a distributed DDoS defense. Clients behind a shared proxy may share a limit. Do not configure the ASGI server to trust forwarded addresses from arbitrary clients.
+- API write payloads are limited to 16 KiB. URL validation rejects embedded credentials, invalid ports, backslashes, and unescaped whitespace/control characters.
+- Responses use `Cache-Control: no-store`, a restrictive Content Security Policy, frame protection, MIME sniffing protection, and `Referrer-Policy: no-referrer`. HTTPS responses add HSTS. Destination URLs are not included in application log messages; platform/server logs may still record request paths.
+- A public short link is not a secret or a password-protected document: anyone who has it can follow it and discover its destination. Custom aliases are easier to guess. Never use link shortening as access control for private documents. The public creation endpoint remains open and rate limited; it does not detect phishing or guarantee destination safety.
 
 ## Scope
 

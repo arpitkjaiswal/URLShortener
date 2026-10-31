@@ -59,3 +59,11 @@ class UrlListItem(BaseModel):
     created_at: datetime
     expires_at: datetime | None = None
     clicks: int
+
+class LoginRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=512)
+
+
+class UrlUpdate(BaseModel):
+    url: str = Field(min_length=1, max_length=8192)
+    ttl_seconds: int | None = Field(default=None, ge=1, le=315360000)

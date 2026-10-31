@@ -486,3 +486,15 @@ footer p {
 .link-options { margin-top: 20px; }
 .link-options summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--green); }
 .link-options .options { margin-top: 16px; }
+
+[hidden] { display: none !important; }
+.session-bar { display:flex; align-items:center; justify-content:space-between; gap:16px; background:#edf6e5; padding:14px 18px; border-radius:10px; margin-bottom:20px; font-size:12px; }
+.filter-controls { display:flex; align-items:end; gap:10px; }
+.filter-controls label { margin:0; }
+.filter-controls select { margin-top:6px; font-size:12px; padding:10px; }
+.edit-expiry-label { margin-top:18px; }
+#edit-message, #access-message { color:#a02d28; font-size:13px; }
+.recovery { max-width:620px; padding:100px 24px; }
+.recovery-panel { margin-top:30px; }
+.recovery-title { font-size:40px; }
+@media(max-width:760px) { .toolbar { flex-direction:column; align-items:stretch; } .filter-controls { flex-wrap:wrap; } .session-bar { align-items:flex-start; flex-direction:column; } }

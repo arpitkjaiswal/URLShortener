@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.core.security import COOKIE_NAME, SESSION_TTL, check_origin, client_key
+from app.schemas.url import LoginRequest, UrlUpdate
 from app.db.database import get_db
 from app.schemas.url import ErrorResponse, HealthResponse, ShortenResponse, UrlCreate, UrlStatsResponse, UrlListItem
 from app.services.shortener import ShortenerService, record_click_task
@@ -62,11 +64,50 @@ def get_shortener_service(
 
 
 def require_management(request: Request) -> None:
-    """Protect private management endpoints when an access key is configured."""
+    """Fail closed without configuration; accept API keys or an expiring session."""
     expected = request.app.state.settings.admin_token
+    if not expected:
+        raise HTTPException(503, 'Management is locked. Configure ADMIN_TOKEN on the server.')
+    access = request.app.state.access
     supplied = request.headers.get("X-Admin-Token", "")
-    if expected and not compare_digest(supplied.encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail="Enter your management access key to continue.")
+    if supplied and compare_digest(supplied.encode(), expected.encode()):
+        return
+    token = request.cookies.get(COOKIE_NAME, '')
+    if token and access.valid(token, expected):
+        if request.method not in {'GET', 'HEAD'}:
+            check_origin(request, required=True)
+        return
+    access.limit(('auth', client_key(request)), 10)
+    raise HTTPException(401, 'Unlock your dashboard to continue.')
+
+
+@api_router.post('/auth/login')
+def login(payload: LoginRequest, request: Request, response: Response):
+    check_origin(request)
+    request.app.state.access.limit(('login', client_key(request)), 5)
+    expected = request.app.state.settings.admin_token
+    if not expected:
+        raise HTTPException(503, 'Management is locked. Configure ADMIN_TOKEN on the server.')
+    if not compare_digest(payload.key.encode(), expected.encode()):
+        raise HTTPException(401, 'That access key is not correct. Please try again.')
+    token = request.app.state.access.issue(expected)
+    response.set_cookie(COOKIE_NAME, token, max_age=SESSION_TTL, httponly=True,
+                        secure=request.app.state.settings.base_url.startswith('https://'),
+                        samesite='strict', path='/api/v1')
+    return {'status': 'unlocked', 'expires_in': SESSION_TTL}
+
+
+@api_router.get('/auth/session', dependencies=[Depends(require_management)])
+def session_status(request: Request):
+    return {'expires_in': request.app.state.access.remaining(request.cookies.get(COOKIE_NAME, ''))}
+
+
+@api_router.post('/auth/logout')
+def logout(request: Request, response: Response):
+    check_origin(request, required=True)
+    request.app.state.access.revoke(request.cookies.get(COOKIE_NAME, ''))
+    response.delete_cookie(COOKIE_NAME, path='/api/v1')
+    return {'status': 'locked'}
 
 
 @router.get("/health", response_model=HealthResponse, summary="Health check")
@@ -84,9 +125,10 @@ def health_check(session: Session = Depends(get_db)) -> HealthResponse:
     summary="Shorten a URL",
     responses={400: {"model": ErrorResponse}},
 )
-def shorten_url(payload: UrlCreate, service: ShortenerService = Depends(get_shortener_service)) -> ShortenResponse:
+def shorten_url(payload: UrlCreate, request: Request, service: ShortenerService = Depends(get_shortener_service)) -> ShortenResponse:
     """Create a new shortened URL."""
 
+    request.app.state.access.limit(('create', client_key(request)), 20)
     try:
         url = service.shorten_url(payload)
     except ValueError as error:
@@ -148,8 +190,22 @@ def list_urls(
         for u in recent
     ]
 
+@api_router.patch('/urls/{short_code}', dependencies=[Depends(require_management)], response_model=UrlListItem)
+def update_url(short_code: str, payload: UrlUpdate, service: ShortenerService = Depends(get_shortener_service)):
+    try:
+        url = service.update_url(short_code, payload)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    if url is None:
+        raise HTTPException(404, 'Short URL not found')
+    return UrlListItem(short_code=url.short_code, original_url=url.original_url,
+                       short_url=service.build_short_url(url.short_code), clicks=url.clicks,
+                       created_at=url.created_at, expires_at=url.expires_at)
+
+
 @api_router.get("/qr/{short_code}", summary="Download a QR code")
-def qr_code(short_code: str, service: ShortenerService = Depends(get_shortener_service)) -> Response:
+def qr_code(short_code: str, request: Request, service: ShortenerService = Depends(get_shortener_service)) -> Response:
+    request.app.state.access.limit(('qr', client_key(request)), 60)
     if service.resolve_url(short_code) is None:
         raise HTTPException(status_code=404, detail="Short URL not found")
     image = qrcode.make(service.build_short_url(short_code), image_factory=qrcode.image.svg.SvgPathImage)

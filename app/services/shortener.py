@@ -42,7 +42,7 @@ class ShortenerService:
         """Validate and store a new shortened URL."""
 
         if not is_valid_url(payload.url):
-            self.logger.warning("Invalid URL request: %s", payload.url)
+            self.logger.warning("Invalid URL request")
             raise ValueError("Invalid URL")
 
         now = datetime.now(timezone.utc)
@@ -79,7 +79,7 @@ class ShortenerService:
 
         self.repository.commit()
         self.cache.set(short_code, url, ttl_seconds=self._cache_ttl_seconds(url, now))
-        self.logger.info("Shortened URL id=%s code=%s url=%s", url.id, short_code, payload.url.strip())
+        self.logger.info("Shortened URL id=%s", url.id)
         return url
 
     def resolve_url(self, short_code: str) -> Any:
@@ -101,7 +101,7 @@ class ShortenerService:
             return None
 
         self.cache.set(short_code, url, ttl_seconds=self._cache_ttl_seconds(url, now))
-        self.logger.info("Redirected short_code=%s target=%s", short_code, url.original_url)
+        self.logger.debug("Resolved short link")
         return url
 
     def get_stats(self, short_code: str) -> Any:
@@ -112,6 +112,21 @@ class ShortenerService:
             self.logger.warning("Stats requested for unknown or expired short code: %s", short_code)
             return None
 
+        return url
+
+    def update_url(self, short_code, payload):
+        url = self.repository.get_by_short_code(short_code)
+        if url is None:
+            return None
+        if not is_valid_url(payload.url):
+            raise ValueError('Please enter a valid HTTP or HTTPS destination without embedded credentials.')
+        url.original_url = payload.url.strip()
+        if 'ttl_seconds' in payload.model_fields_set:
+            url.ttl_seconds = payload.ttl_seconds
+            url.expires_at = (datetime.now(timezone.utc) + timedelta(seconds=payload.ttl_seconds)
+                              if payload.ttl_seconds is not None else None)
+        self.repository.commit()
+        self.cache.delete(short_code)
         return url
 
     def delete_url(self, short_code: str) -> bool:

@@ -22,6 +22,7 @@ def settings(tmp_path: Path) -> Settings:
         database_url=f"sqlite:///{database_path}",
         base_url="http://testserver",
         log_level="WARNING",
+        admin_token="fixture-test-key",
     )
 
 
@@ -36,7 +37,7 @@ def app(settings: Settings):
 def client(app):
     """Create a test client for API calls."""
 
-    return TestClient(app)
+    return TestClient(app, headers={"X-Admin-Token": "fixture-test-key"})
 
 
 @pytest.fixture()
