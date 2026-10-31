@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 BASE = len(ALPHABET)
 

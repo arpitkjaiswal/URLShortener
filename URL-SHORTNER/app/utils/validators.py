@@ -1,28 +1,28 @@
-"""Validation helpers."""
+"""Validate redirect destinations without fetching user-provided URLs."""
 
 from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+from pydantic import HttpUrl, TypeAdapter, ValidationError
 
-ALLOWED_SCHEMES = {"http", "https"}
+URL_ADAPTER = TypeAdapter(HttpUrl)
 
 
 def is_valid_url(url: str) -> bool:
-    """Return True when the URL is a well-formed HTTP or HTTPS URL."""
-
-    if not url or not url.strip():
+    if not url or len(url) > 2048:
         return False
-
+    value = url.strip()
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+        return False
     try:
-        parsed = urlsplit(url.strip())
-    except ValueError:
+        parsed = urlsplit(value)
+        URL_ADAPTER.validate_python(value)
+        return bool(
+            parsed.hostname
+            and parsed.scheme.lower() in {"http", "https"}
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except (ValueError, ValidationError):
         return False
-
-    if parsed.scheme.lower() not in ALLOWED_SCHEMES:
-        return False
-    if not parsed.netloc:
-        return False
-    if parsed.hostname is None:
-        return False
-    return True

@@ -1,86 +1,64 @@
-"""Database engine and session helpers."""
+"""Database connections and additive migration from the original schema."""
 
 from __future__ import annotations
 
 from collections.abc import Generator
-from dataclasses import dataclass
 
 from fastapi import Request
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.db.models import Base
+from app.db.models import Base, Url
 
 
-def _sqlite_connect_args(database_url: str) -> dict[str, bool]:
-    """Return SQLite-specific engine arguments when needed."""
-
-    if database_url.startswith("sqlite"):
-        return {"check_same_thread": False}
-    return {}
+def normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url[len("postgres://") :]
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url[len("postgresql://") :]
+    return database_url
 
 
 def create_engine_for_database(database_url: str) -> Engine:
-    """Create a SQLAlchemy engine from a database URL."""
-
-    return create_engine(
-        database_url,
-        future=True,
-        pool_pre_ping=True,
-        connect_args=_sqlite_connect_args(database_url),
-    )
+    database_url = normalize_database_url(database_url)
+    url = make_url(database_url)
+    options = {"pool_pre_ping": True}
+    if url.get_backend_name() == "sqlite":
+        options["connect_args"] = {"check_same_thread": False, "timeout": 30}
+        if url.database in {None, "", ":memory:"}:
+            options["poolclass"] = StaticPool
+    else:
+        options.update(pool_size=5, max_overflow=5, pool_timeout=10, connect_args={"connect_timeout": 10})
+    return create_engine(database_url, **options)
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
-    """Create a session factory bound to the given engine."""
-
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 def init_db(engine: Engine) -> None:
-    """Create all tables for the configured engine."""
+    """Create fresh tables or preserve and upgrade an existing URLs table.
 
-    Base.metadata.create_all(bind=engine)
-    if engine.dialect.name == "sqlite":
-        _migrate_sqlite_urls_table(engine)
-
-
-@dataclass(frozen=True, slots=True)
-class _ColumnMigration:
-    name: str
-    ddl: str
-
-
-def _migrate_sqlite_urls_table(engine: Engine) -> None:
-    """Backfill missing columns for older SQLite databases.
-
-    SQLite does not support the kind of online schema migrations used by a
-    dedicated migration tool. For local development, we keep startup resilient
-    by adding nullable columns when they are absent.
+    A PostgreSQL transaction advisory lock serializes rolling-deploy startup.
+    This migration only adds nullable columns and indexes; it never deletes data.
     """
-
-    required_columns = {
-        "ttl_seconds": _ColumnMigration("ttl_seconds", "ALTER TABLE urls ADD COLUMN ttl_seconds INTEGER"),
-        "expires_at": _ColumnMigration("expires_at", "ALTER TABLE urls ADD COLUMN expires_at DATETIME"),
-    }
-
     with engine.begin() as connection:
-        existing_columns = {
-            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(urls)").fetchall()
-        }
-
-        for column_name, migration in required_columns.items():
-            if column_name not in existing_columns:
-                connection.execute(text(migration.ddl))
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SELECT pg_advisory_xact_lock(73421918)"))
+        if inspect(connection).has_table("urls"):
+            columns = {column["name"] for column in inspect(connection).get_columns("urls")}
+            timestamp = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+            additions = {"ttl_seconds": "INTEGER", "expires_at": timestamp, "owner_hash": "VARCHAR(64)"}
+            for name, ddl_type in additions.items():
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE urls ADD COLUMN {name} {ddl_type}"))
+        Base.metadata.create_all(connection)
+        for index in Url.__table__.indexes:
+            index.create(connection, checkfirst=True)
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:
-    """Yield a database session from the application state."""
-
-    session_factory = request.app.state.session_factory
-    db = session_factory()
-    try:
-        yield db
-    finally:
-        db.close()
+    with request.app.state.session_factory() as session:
+        yield session

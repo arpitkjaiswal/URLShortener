@@ -1,82 +1,64 @@
-"""HTTP routes for the URL shortener API."""
-
-from __future__ import annotations
+"""HTTP interface for the dashboard and public redirects."""
 
 from pathlib import Path
-from typing import Any, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.security import get_owner, initialize_workspace, limit_creation
 from app.db.database import get_db
-from app.schemas.url import ErrorResponse, HealthResponse, ShortenResponse, UrlCreate, UrlStatsResponse, UrlListItem
-from app.services.shortener import ShortenerService, record_click_task
-from app.utils.cache import InMemoryCache
+from app.schemas.url import (
+    HealthResponse,
+    ShortenResponse,
+    SummaryResponse,
+    UrlCreate,
+    UrlListItem,
+    UrlPage,
+    UrlStatsResponse,
+)
+from app.services.shortener import CodeGenerationError, ShortenerService
 
 router = APIRouter()
 api_router = APIRouter(prefix="/api/v1")
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 
+def get_service(request: Request, session: Session = Depends(get_db)) -> ShortenerService:
+    return ShortenerService(session, request.app.state.settings)
+
+
 @router.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    """Serve the tiny browser frontend."""
-
     return FileResponse(STATIC_DIR / "index.html")
 
 
-def get_settings_dependency(request: Request) -> Settings:
-    """Resolve the application settings from the current request."""
-
-    return request.app.state.settings
-
-
-def get_cache_dependency(request: Request) -> InMemoryCache:
-    """Resolve the shared cache from the current request."""
-
-    return request.app.state.url_cache
-
-
-def get_session_factory(request: Request) -> sessionmaker[Session]:
-    """Resolve the session factory from the current request."""
-
-    return request.app.state.session_factory
-
-
-def get_shortener_service(
-    session: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings_dependency),
-    cache: InMemoryCache = Depends(get_cache_dependency),
-) -> ShortenerService:
-    """Build a request-scoped service instance."""
-
-    return ShortenerService(session=session, settings=settings, cache=cache)
-
-
-@router.get("/health", response_model=HealthResponse, summary="Health check")
-def health_check() -> HealthResponse:
-    """Return the service status."""
-
+@router.get("/health", response_model=HealthResponse)
+def health_check(session: Session = Depends(get_db)) -> HealthResponse:
+    session.execute(text("SELECT 1"))
     return HealthResponse(status="healthy")
 
 
+@api_router.get("/session")
+def session(request: Request, response: Response) -> dict[str, str]:
+    """Initialize/renew an anonymous workspace. Keep the returned HTTP-only cookie."""
+    initialize_workspace(request, response)
+    return {"status": "ready"}
+
+
 @api_router.post(
-    "/shorten",
-    response_model=ShortenResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Shorten a URL",
-    responses={400: {"model": ErrorResponse}},
+    "/shorten", response_model=ShortenResponse, status_code=201, dependencies=[Depends(limit_creation)]
 )
-def shorten_url(payload: UrlCreate, service: ShortenerService = Depends(get_shortener_service)) -> ShortenResponse:
-    """Create a new shortened URL."""
-
+def shorten_url(
+    payload: UrlCreate, owner: str = Depends(get_owner), service: ShortenerService = Depends(get_service)
+) -> ShortenResponse:
     try:
-        url = service.shorten_url(payload)
+        url = service.shorten_url(payload, owner)
     except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
-
+        raise HTTPException(400, str(error)) from error
+    except CodeGenerationError as error:
+        raise HTTPException(503, str(error)) from error
     return ShortenResponse(
         short_code=url.short_code,
         short_url=service.build_short_url(url.short_code),
@@ -84,86 +66,60 @@ def shorten_url(payload: UrlCreate, service: ShortenerService = Depends(get_shor
     )
 
 
-@api_router.get(
-    "/stats/{short_code}",
-    response_model=UrlStatsResponse,
-    summary="Get URL analytics",
-    responses={404: {"model": ErrorResponse}},
-)
-def get_stats(short_code: str, service: ShortenerService = Depends(get_shortener_service)) -> UrlStatsResponse:
-    """Return analytics for a given short code."""
-
-    url = service.get_stats(short_code)
+@api_router.get("/stats/{short_code}", response_model=UrlStatsResponse)
+def get_stats(
+    short_code: str, owner: str = Depends(get_owner), service: ShortenerService = Depends(get_service)
+):
+    url = service.repository.get_owned(short_code, owner)
     if url is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Short URL not found")
+        raise HTTPException(404, "Short URL not found")
+    return url
 
-    return UrlStatsResponse(
-        original_url=url.original_url,
-        short_code=url.short_code,
-        clicks=url.clicks,
-        created_at=url.created_at,
-        expires_at=url.expires_at,
-        last_accessed=url.last_accessed,
+
+@api_router.get("/summary", response_model=SummaryResponse)
+def summary(owner: str = Depends(get_owner), service: ShortenerService = Depends(get_service)):
+    return service.repository.summary(owner)
+
+
+@api_router.get("/urls", response_model=UrlPage)
+def list_urls(
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    q: str = Query("", max_length=200),
+    owner: str = Depends(get_owner),
+    service: ShortenerService = Depends(get_service),
+) -> UrlPage:
+    items, total = service.repository.list_recent(owner, limit, offset, q.strip())
+    return UrlPage(
+        items=[
+            UrlListItem(
+                **UrlStatsResponse.model_validate(item).model_dump(),
+                short_url=service.build_short_url(item.short_code),
+            )
+            for item in items
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 
-# New endpoint: list recent URLs (default limit 20)
-@api_router.get(
-    "/urls",
-    response_model=List[UrlListItem],
-    summary="List recent shortened URLs",
-    description="Returns the most recent URLs ordered by creation time, limited to 20 by default.",
-)
-def list_urls(
-    limit: int = Query(20, ge=1, le=50),
-    service: ShortenerService = Depends(get_shortener_service),
-) -> List[UrlListItem]:
-    recent = service.repository.list_recent(limit)
-    return [
-        UrlListItem(
-            short_code=u.short_code,
-            original_url=u.original_url,
-            short_url=service.build_short_url(u.short_code),
-            created_at=u.created_at,
-            expires_at=u.expires_at,
-            clicks=u.clicks,
-        )
-        for u in recent
-    ]
-
-# DELETE endpoint to remove a short URL
-@api_router.delete(
-    "/urls/{short_code}",
-    summary="Delete a shortened URL",
-    response_model=None,
-    responses={404: {"model": ErrorResponse}},
-)
-def delete_url_endpoint(
-    short_code: str,
-    service: ShortenerService = Depends(get_shortener_service),
-) -> None:
-    """Delete a URL by its short code. Returns 404 if not found."""
-    success = service.delete_url(short_code)
-    if not success:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Short URL not found")
-    return None
-
-
-@router.get(
-    "/{short_code}",
-    include_in_schema=False,
-)
-def redirect_short_code(
-    short_code: str,
-    background_tasks: BackgroundTasks,
-    service: ShortenerService = Depends(get_shortener_service),
-    session_factory: sessionmaker[Session] = Depends(get_session_factory),
+@api_router.delete("/urls/{short_code}", status_code=204)
+def delete_url(
+    short_code: str, owner: str = Depends(get_owner), service: ShortenerService = Depends(get_service)
 ) -> Response:
-    """Redirect a short code to its original destination."""
+    if not service.repository.delete_owned(short_code, owner):
+        raise HTTPException(404, "Short URL not found")
+    return Response(status_code=204)
 
-    url = service.resolve_url(short_code)
-    if url is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Short URL not found")
 
-    background_tasks.add_task(record_click_task, session_factory, short_code)
-    return RedirectResponse(url=url.original_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+@router.api_route("/{short_code}", methods=["GET", "HEAD"], include_in_schema=False)
+def redirect_short_code(
+    short_code: str, request: Request, service: ShortenerService = Depends(get_service)
+) -> Response:
+    destination = service.repository.resolve(short_code, count_click=request.method == "GET")
+    if destination is None:
+        if "text/html" in request.headers.get("accept", ""):
+            return FileResponse(STATIC_DIR / "not-found.html", status_code=404)
+        raise HTTPException(404, "Short URL not found")
+    return RedirectResponse(destination, status_code=307, headers={"Cache-Control": "no-store"})

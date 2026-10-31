@@ -1,34 +1,29 @@
-"""Persistence operations for URL mappings."""
-
-from __future__ import annotations
+"""Persistence operations; ownership is enforced in every management query."""
 
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select, update, delete
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import Url
 
 
 class UrlRepository:
-    """Encapsulate URL persistence concerns."""
-
     def __init__(self, session: Session) -> None:
         self.session = session
 
     def create(
         self,
         original_url: str,
-        short_code: str = "",
-        ttl_seconds: int | None = None,
-        expires_at: datetime | None = None,
+        short_code: str,
+        owner_hash: str,
+        ttl_seconds: int | None,
+        expires_at: datetime | None,
     ) -> Url:
-        """Insert a URL record and flush to obtain its numeric ID."""
-
         url = Url(
             original_url=original_url,
             short_code=short_code,
-            clicks=0,
+            owner_hash=owner_hash,
             ttl_seconds=ttl_seconds,
             expires_at=expires_at,
         )
@@ -36,69 +31,65 @@ class UrlRepository:
         self.session.flush()
         return url
 
-    def set_short_code(self, url: Url, short_code: str) -> Url:
-        """Persist the generated short code for an existing record."""
-
-        url.short_code = short_code
-        self.session.flush()
-        return url
-
-    def get_by_short_code(self, short_code: str) -> Url | None:
-        """Return the URL record that matches the provided code."""
-
-        statement = select(Url).where(Url.short_code == short_code)
-        return self.session.execute(statement).scalar_one_or_none()
-
-    def get_active_by_short_code(self, short_code: str, now: datetime | None = None) -> Url | None:
-        """Return a short code only if it has not expired."""
-
-        current_time = now or datetime.now(timezone.utc)
-        statement = select(Url).where(
-            Url.short_code == short_code,
-            or_(Url.expires_at.is_(None), Url.expires_at > current_time),
+    def get_owned(self, short_code: str, owner_hash: str) -> Url | None:
+        return self.session.scalar(
+            select(Url).where(Url.short_code == short_code, Url.owner_hash == owner_hash)
         )
-        return self.session.execute(statement).scalar_one_or_none()
 
-    def record_access(self, url: Url, accessed_at: datetime | None = None) -> Url:
-        """Update click analytics after a redirect."""
-
-        url.clicks += 1
-        url.last_accessed = accessed_at or datetime.now(timezone.utc)
-        self.session.flush()
-        return url
-
-    def list_recent(self, limit: int = 20) -> list[Url]:
-        """Return the most recent URLs ordered by creation time, limited by `limit`."""
-        stmt = select(Url).order_by(Url.created_at.desc()).limit(limit)
-        return self.session.execute(stmt).scalars().all()
-
-    def delete_by_short_code(self, short_code: str) -> bool:
-        """Delete a URL record by its short_code. Returns True if a row was deleted."""
-        stmt = (delete(Url).where(Url.short_code == short_code))
-        result = self.session.execute(stmt)
-        self.session.flush()
-        return result.rowcount > 0
-        """Update analytics for a short code without fetching the full row first."""
-
-        updated_at = accessed_at or datetime.now(timezone.utc)
+    def resolve(self, short_code: str, count_click: bool = True) -> str | None:
+        now = datetime.now(timezone.utc)
+        conditions = (Url.short_code == short_code, or_(Url.expires_at.is_(None), Url.expires_at > now))
+        if not count_click:
+            return self.session.scalar(select(Url.original_url).where(*conditions))
+        # One atomic write prevents lost increments and expires links before counting.
         statement = (
             update(Url)
-            .where(
-                Url.short_code == short_code,
-                or_(Url.expires_at.is_(None), Url.expires_at > updated_at),
-            )
-            .values(clicks=Url.clicks + 1, last_accessed=updated_at)
+            .where(*conditions)
+            .values(clicks=Url.clicks + 1, last_accessed=now)
+            .returning(Url.original_url)
         )
-        result = self.session.execute(statement)
-        self.session.flush()
-        return result.rowcount > 0
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-
+        destination = self.session.scalar(statement)
         self.session.commit()
+        return destination
 
-    def rollback(self) -> None:
-        """Rollback the current transaction."""
+    def list_recent(self, owner_hash: str, limit: int, offset: int, query: str) -> tuple[list[Url], int]:
+        conditions = [Url.owner_hash == owner_hash]
+        if query:
+            conditions.append(
+                or_(
+                    Url.original_url.icontains(query, autoescape=True),
+                    Url.short_code.icontains(query, autoescape=True),
+                )
+            )
+        total = self.session.scalar(select(func.count()).select_from(Url).where(*conditions))
+        items = self.session.scalars(
+            select(Url)
+            .where(*conditions)
+            .order_by(Url.created_at.desc(), Url.id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return list(items), total
 
-        self.session.rollback()
+    def summary(self, owner_hash: str) -> dict:
+        now = datetime.now(timezone.utc)
+        total, clicks, expired = self.session.execute(
+            select(
+                func.count(Url.id),
+                func.coalesce(func.sum(Url.clicks), 0),
+                func.coalesce(func.sum(case((Url.expires_at <= now, 1), else_=0)), 0),
+            ).where(Url.owner_hash == owner_hash)
+        ).one()
+        return {
+            "total_links": total,
+            "total_clicks": clicks,
+            "active_links": total - expired,
+            "expired_links": expired,
+        }
+
+    def delete_owned(self, short_code: str, owner_hash: str) -> bool:
+        result = self.session.execute(
+            delete(Url).where(Url.short_code == short_code, Url.owner_hash == owner_hash)
+        )
+        self.session.commit()
+        return result.rowcount > 0

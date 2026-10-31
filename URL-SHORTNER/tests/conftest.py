@@ -1,59 +1,61 @@
-"""Shared pytest fixtures."""
+"""Run the same API tests against isolated SQLite or PostgreSQL databases."""
 
-from __future__ import annotations
-
-from pathlib import Path
+import os
+import uuid
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
-
 from app.core.config import Settings
-from app.db.database import create_engine_for_database, create_session_factory, init_db
+from app.db.database import normalize_database_url
 from app.main import create_app
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 
 @pytest.fixture()
-def settings(tmp_path: Path) -> Settings:
-    """Provide isolated application settings for tests."""
+def settings(tmp_path):
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        yield Settings(
+            database_url=f"sqlite:///{tmp_path / 'test.db'}",
+            base_url="http://testserver",
+            log_level="WARNING",
+        )
+        return
+    # Each test gets a dedicated schema; never drop a user's public schema.
+    from sqlalchemy.engine import make_url
 
-    database_path = tmp_path / "test.db"
-    return Settings(
-        database_url=f"sqlite:///{database_path}",
-        base_url="http://testserver",
-        log_level="WARNING",
+    schema = "test_" + uuid.uuid4().hex
+    engine = create_engine(normalize_database_url(database_url))
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    url = make_url(normalize_database_url(database_url)).update_query_dict(
+        {"options": f"-csearch_path={schema}"}
     )
+    try:
+        yield Settings(
+            database_url=url.render_as_string(hide_password=False),
+            base_url="http://testserver",
+            log_level="WARNING",
+        )
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        engine.dispose()
 
 
 @pytest.fixture()
-def app(settings: Settings):
-    """Create a FastAPI app backed by a temporary SQLite database."""
-
+def app(settings):
     return create_app(settings)
 
 
 @pytest.fixture()
 def client(app):
-    """Create a test client for API calls."""
-
-    return TestClient(app)
-
-
-@pytest.fixture()
-def session_factory(settings: Settings):
-    """Create a session factory for direct database access in tests."""
-
-    engine = create_engine_for_database(settings.database_url)
-    init_db(engine)
-    return create_session_factory(engine)
+    with TestClient(app) as client:
+        assert client.get("/api/v1/session").status_code == 200
+        yield client
 
 
 @pytest.fixture()
-def db_session(session_factory) -> Session:
-    """Provide a database session for assertions."""
-
-    session = session_factory()
-    try:
+def db_session(client, app):
+    with app.state.session_factory() as session:
         yield session
-    finally:
-        session.close()

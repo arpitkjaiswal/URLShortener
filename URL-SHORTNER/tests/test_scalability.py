@@ -1,45 +1,39 @@
-"""Tests for scalable features."""
+"""Real uniqueness collisions and database failure handling."""
 
-from __future__ import annotations
+from itertools import chain, repeat
 
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from app.core.config import Settings
-from app.utils.cache import create_cache, RedisCache, InMemoryCache
-from app.services.shortener import ShortenerService
-from app.schemas.url import UrlCreate
+from app.repositories.url_repository import UrlRepository
+from app.services import shortener
+from sqlalchemy.exc import OperationalError
 
 
-def test_redis_cache_fallback() -> None:
-    """RedisCache should fallback to InMemoryCache on connection failures."""
-
-    # Set up cache with a invalid redis url
-    cache = create_cache("redis://localhost:9999/0")
-    assert isinstance(cache, RedisCache)
-
-    # Set and get should fall back to InMemoryCache and work successfully
-    cache.set("key1", "val1")
-    assert cache.get("key1") == "val1"
-    assert cache._use_fallback is True
-
-    # Delete and clear should also work
-    cache.delete("key1")
-    assert cache.get("key1") is None
-    cache.clear()
+def test_short_code_collision_retries(client, monkeypatch):
+    choices = iter(chain(repeat("a", 14), repeat("b", 7)))
+    monkeypatch.setattr(shortener.secrets, "choice", lambda _: next(choices))
+    first = client.post("/api/v1/shorten", json={"url": "https://example.com/first"})
+    second = client.post("/api/v1/shorten", json={"url": "https://example.com/second"})
+    assert first.json()["short_code"] == "aaaaaaa"
+    assert second.status_code == 201
+    assert second.json()["short_code"] == "bbbbbbb"
+    assert client.get("/api/v1/urls").json()["total"] == 2
 
 
-def test_random_short_code_generation(db_session, settings) -> None:
-    """Shortening a URL should generate a random 7-character base62 code."""
+def test_exhausted_collisions_leave_session_usable(client, monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(shortener.secrets, "choice", lambda _: "a")
+        assert client.post("/api/v1/shorten", json={"url": "https://example.com"}).status_code == 201
+        assert client.post("/api/v1/shorten", json={"url": "https://example.com"}).status_code == 503
+    assert client.post("/api/v1/shorten", json={"url": "https://example.com/next"}).status_code == 201
+    assert client.get("/api/v1/urls").json()["total"] == 2
 
-    cache = InMemoryCache(ttl_seconds=60)
-    service = ShortenerService(session=db_session, settings=settings, cache=cache)
 
-    payload = UrlCreate(url="https://scalability-test.com")
-    url1 = service.shorten_url(payload)
-    url2 = service.shorten_url(payload)
+def test_database_failure_is_not_retried_as_a_collision(client, monkeypatch):
+    calls = []
 
-    assert len(url1.short_code) == 7
-    assert len(url2.short_code) == 7
-    assert url1.short_code != url2.short_code
+    def broken(*args, **kwargs):
+        calls.append(True)
+        raise OperationalError("insert", {}, Exception("unavailable"))
+
+    monkeypatch.setattr(UrlRepository, "create", broken)
+    assert client.post("/api/v1/shorten", json={"url": "https://example.com"}).status_code == 503
+    assert len(calls) == 1

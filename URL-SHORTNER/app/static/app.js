@@ -1,169 +1,321 @@
-// app/static/app.js
-// Single-file JavaScript for the URL Shortener Dashboard
-// Handles form submission, recent URLs rendering, stats modal, and toast notifications.
+"use strict";
 
-document.addEventListener('DOMContentLoaded', () => {
-  // Elements
-  const form = document.getElementById('shorten-form');
-  const urlInput = document.getElementById('url-input');
-  const ttlInput = document.getElementById('ttl-input');
-  const ttlUnit = document.getElementById('ttl-unit');
-  const submitBtn = form.querySelector('button[type=\"submit\"]');
-  const recentContainer = document.getElementById('recent-urls');
-  const toastContainer = document.getElementById('toast-container');
-  const statsModal = document.getElementById('stats-modal');
-  const statsBody = document.getElementById('stats-body');
-  const modalClose = document.getElementById('modal-close');
+const $ = (id) => document.getElementById(id);
+const state = {
+  offset: 0,
+  limit: 10,
+  query: "",
+  loading: false,
+  ready: false,
+  creating: false,
+  version: 0,
+  pendingDelete: null,
+};
+const number = new Intl.NumberFormat();
+const date = (value) => (value ? new Date(value).toLocaleString() : "Never");
 
-  // Enable submit when URL has value
-  urlInput.addEventListener('input', () => {
-    submitBtn.disabled = urlInput.value.trim().length === 0;
-  });
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
-  // Helper: show toast
-  function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = message;
-    toastContainer.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+function toast(message, error = false) {
+  const node = element("div", error ? "toast error" : "toast", message);
+  $("toast-container").replaceChildren(node);
+  setTimeout(() => node.remove(), 4500);
+}
+
+async function api(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...options,
+    });
+  } catch {
+    throw new Error("Unable to connect. Check your connection and try again.");
   }
-
-  // Helper: format date
-  function formatDate(iso) {
-    if (!iso) return '—';
-    const d = new Date(iso);
-    return d.toLocaleString();
+  const data =
+    response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = data?.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item) => `${item.loc.at(-1)}: ${item.msg}`).join(". ")
+      : detail;
+    throw new Error(
+      message || "The service is unavailable. Please try again shortly.",
+    );
   }
+  return data;
+}
 
-  // Render a single URL card
-  function renderUrlCard(item) {
-    const card = document.createElement('div');
-    card.className = 'card recent-card';
-    card.dataset.shortCode = item.short_code;
-    card.innerHTML = `
-      <div class="card-header">
-        <span class="short-code">${item.short_code}</span>
-        <button class="btn copy-btn" title="Copy short URL">📋</button>
-        <button class="btn open-btn" title="Open link">🔗</button>
-        <button class="btn stats-btn" title="View stats">📊</button>
-        <button class="btn delete-btn" title="Delete URL">🗑️</button>
-      </div>
-      <div class="card-body">
-        <p class="original-url" title="${item.original_url}">${item.original_url}</p>
-        <p class="meta">Created: ${formatDate(item.created_at)} | Clicks: ${item.clicks}</p>
-      </div>
-      <div class="stats-content hidden"></div>
-    `;
-    // Copy button
-    card.querySelector('.copy-btn').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(item.short_url);
-        showToast('Short URL copied!', 'success');
-      } catch (e) {
-        showToast('Copy failed', 'error');
-      }
-    });
-    // Open button
-    card.querySelector('.open-btn').addEventListener('click', () => {
-      window.open(item.short_url, '_blank');
-    });
-    // Stats button
-    card.querySelector('.stats-btn').addEventListener('click', async () => {
-      const statsDiv = card.querySelector('.stats-content');
-      if (!statsDiv.classList.contains('hidden')) {
-        // Hide stats if already shown
-        statsDiv.classList.add('hidden');
-        return;
-      }
-      try {
-        const resp = await fetch(`http://127.0.0.1:8000/api/v1/stats/${item.short_code}`);
-        if (!resp.ok) throw new Error('Failed');
-        const data = await resp.json();
-        statsDiv.innerHTML = `
-          <p><strong>Original:</strong> ${data.original_url}</p>
-          <p><strong>Short:</strong> ${data.short_code}</p>
-          <p><strong>Clicks:</strong> ${data.clicks}</p>
-          <p><strong>Created:</strong> ${formatDate(data.created_at)}</p>
-          <p><strong>Expires:</strong> ${formatDate(data.expires_at)}</p>
-          <p><strong>Last accessed:</strong> ${formatDate(data.last_accessed)}</p>
-        `;
-        statsDiv.classList.remove('hidden');
-      } catch (e) {
-        showToast('Unable to load stats', 'error');
-      }
-    });
-    // Delete button handler
-    card.querySelector('.delete-btn').addEventListener('click', async () => {
-      try {
-        const resp = await fetch(`http://127.0.0.1:8000/api/v1/urls/${item.short_code}`, { method: 'DELETE' });
-        if (!resp.ok) throw new Error('Failed');
-        card.remove();
-        showToast('URL deleted', 'success');
-      } catch (e) {
-        showToast('Delete failed', 'error');
-      }
-    });
-    recentContainer.prepend(card);
+async function copyLink(link) {
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Link copied. Ready to share!");
+  } catch {
+    // Clipboard permission can be denied; let the user select the actual URL.
+    $("result").hidden = false;
+    $("result-link").href = link;
+    $("result-link").textContent = link;
+    const range = document.createRange();
+    range.selectNodeContents($("result-link"));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    toast("Link selected. Press Ctrl+C or ⌘C to copy.");
   }
+}
 
-  // Load recent URLs on page load
-  async function loadRecent() {
-    try {
-      const resp = await fetch('http://127.0.0.1:8000/api/v1/urls');
-      if (!resp.ok) throw new Error('Network response was not ok');
-      const data = await resp.json();
-      recentContainer.innerHTML = '';
-      data.forEach(renderUrlCard);
-    } catch (e) {
-      showToast('Failed to load recent URLs', 'error');
+function updateSubmit() {
+  $("shorten-button").disabled =
+    !state.ready || state.creating || !$("url-input").value.trim();
+}
+
+function makeRow(item) {
+  const row = element("article", "link-row");
+  row.dataset.shortCode = item.short_code;
+  const info = element("div", "link-info");
+  const link = element(
+    "a",
+    "short-link",
+    item.short_url.replace(/^https?:\/\//, ""),
+  );
+  link.href = item.short_url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  const destination = element("p", "original-url", item.original_url);
+  destination.title = item.original_url;
+  info.append(
+    link,
+    destination,
+    element(
+      "div",
+      "link-time",
+      `Created ${new Date(item.created_at).toLocaleDateString()}`,
+    ),
+  );
+  const clicks = element("div", "click-count", number.format(item.clicks));
+  clicks.append(element("span", "", item.clicks === 1 ? "click" : "clicks"));
+  const expired = item.expires_at && new Date(item.expires_at) <= new Date();
+  const status = element(
+    "span",
+    expired ? "link-status expired" : "link-status",
+    expired ? "Expired" : "Active",
+  );
+  status.title = item.expires_at
+    ? `Expires ${date(item.expires_at)}`
+    : "No expiry";
+  const actions = element("div", "row-actions");
+  for (const [label, className, callback] of [
+    ["Copy", "copy-link", () => copyLink(item.short_url)],
+    ["Insights", "stats-link", () => showStats(item.short_code)],
+    [
+      "×",
+      "delete-link",
+      () => {
+        state.pendingDelete = item;
+        $("delete-modal").showModal();
+      },
+    ],
+  ]) {
+    const button = element("button", className, label);
+    button.type = "button";
+    button.setAttribute(
+      "aria-label",
+      `${className === "delete-link" ? "Delete" : label} ${item.short_code}`,
+    );
+    button.addEventListener("click", callback);
+    actions.append(button);
+  }
+  row.append(info, clicks, status, actions);
+  return row;
+}
+
+async function showStats(code) {
+  $("stats-body").replaceChildren(element("p", "subtle", "Loading insights…"));
+  $("stats-modal").showModal();
+  try {
+    const stats = await api(`/stats/${encodeURIComponent(code)}`);
+    const count = element("div", "big-clicks", number.format(stats.clicks));
+    count.append(element("span", "", "total destination visits"));
+    const grid = element("div", "stat-grid");
+    for (const [label, value, wide] of [
+      ["Destination", stats.original_url, true],
+      ["Short code", stats.short_code, false],
+      [
+        "Status",
+        stats.expires_at && new Date(stats.expires_at) <= new Date()
+          ? "Expired"
+          : "Active",
+        false,
+      ],
+      ["Created", date(stats.created_at), false],
+      ["Expires", date(stats.expires_at), false],
+      [
+        "Last visit",
+        stats.last_accessed ? date(stats.last_accessed) : "No visits yet",
+        true,
+      ],
+    ]) {
+      const field = element("div", `stat-field${wide ? " wide" : ""}`);
+      field.append(element("span", "", label), element("strong", "", value));
+      grid.append(field);
+    }
+    $("stats-body").replaceChildren(count, grid);
+  } catch (error) {
+    $("stats-body").replaceChildren(element("p", "form-error", error.message));
+  }
+}
+
+async function loadCollection() {
+  const version = ++state.version;
+  state.loading = true;
+  $("refresh").disabled = true;
+  $("next").disabled = true;
+  $("previous").disabled = true;
+  try {
+    const [page, summary] = await Promise.all([
+      api(
+        `/urls?limit=${state.limit}&offset=${state.offset}&q=${encodeURIComponent(state.query)}`,
+      ),
+      api("/summary"),
+    ]);
+    if (version !== state.version) return;
+    if (!page.items.length && page.total && state.offset >= page.total) {
+      state.offset = Math.floor((page.total - 1) / state.limit) * state.limit;
+      return loadCollection();
+    }
+    $("recent-urls").replaceChildren(...page.items.map(makeRow));
+    $("list-message").hidden = page.items.length > 0;
+    $("list-message").textContent = state.query
+      ? "No links match your search."
+      : "Your collection starts here. Shorten your first link above.";
+    $("link-count").textContent = number.format(page.total);
+    $("page-info").textContent = page.total
+      ? `${state.offset + 1}–${state.offset + page.items.length} of ${page.total} links`
+      : "No links yet";
+    $("previous").disabled = state.offset === 0;
+    $("next").disabled = state.offset + state.limit >= page.total;
+    for (const key of [
+      "total_links",
+      "total_clicks",
+      "active_links",
+      "expired_links",
+    ]) {
+      $(key.replaceAll("_", "-")).textContent = number.format(summary[key]);
+    }
+  } catch (error) {
+    if (version !== state.version) return;
+    $("list-message").hidden = false;
+    $("list-message").textContent = `${error.message} Use Refresh to retry.`;
+  } finally {
+    if (version === state.version) {
+      state.loading = false;
+      $("refresh").disabled = false;
     }
   }
+}
 
-  // Form submission handler
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const url = urlInput.value.trim();
-    let ttlSeconds = null;
-    if (ttlInput.value) {
-      const unit = ttlUnit.value;
-      const val = parseInt(ttlInput.value, 10);
-      const multipliers = { seconds: 1, minutes: 60, hours: 3600, days: 86400 };
-      ttlSeconds = val * (multipliers[unit] || 1);
-    }
-    const payload = { url };
-    if (ttlSeconds !== null) payload.ttl_seconds = ttlSeconds;
-    try {
-      const resp = await fetch('http://127.0.0.1:8000/api/v1/shorten', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || 'Error');
-      // Append new URL to recent list
-      const newItem = {
-        short_code: data.short_code,
-        original_url: url,
-        short_url: data.short_url,
-        created_at: new Date().toISOString(),
-        expires_at: data.expires_at,
-        clicks: 0,
-      };
-      renderUrlCard(newItem);
-      showToast('URL shortened!', 'success');
-      form.reset();
-      submitBtn.disabled = true;
-    } catch (err) {
-      showToast(err.message ?? 'Failed to shorten URL', 'error');
-    }
-  });
+async function initialize() {
+  try {
+    await api("/session");
+    state.ready = true;
+    updateSubmit();
+    await loadCollection();
+  } catch (error) {
+    $("list-message").hidden = false;
+    $("list-message").textContent = `${error.message} Use Refresh to retry.`;
+  }
+}
 
-  // Modal close handler
-  modalClose.addEventListener('click', () => {
-    statsModal.classList.add('hidden');
-  });
-
-  // Initial load
-  loadRecent();
+$("url-input").addEventListener("input", updateSubmit);
+$("ttl-unit").addEventListener("change", () => {
+  $("ttl-input").max = String(
+    Math.floor(31536000 / Number($("ttl-unit").value)),
+  );
 });
+$("shorten-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.creating || !state.ready) return;
+  $("form-error").hidden = true;
+  const payload = { url: $("url-input").value.trim() };
+  if ($("ttl-input").value)
+    payload.ttl_seconds =
+      Number($("ttl-input").value) * Number($("ttl-unit").value);
+  state.creating = true;
+  updateSubmit();
+  $("shorten-button").textContent = "Shortening…";
+  try {
+    const item = await api("/shorten", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    $("result-link").href = item.short_url;
+    $("result-link").textContent = item.short_url;
+    $("result").hidden = false;
+    $("shorten-form").reset();
+    $("ttl-input").max = "365";
+    state.offset = 0;
+    state.query = "";
+    $("search").value = "";
+    toast("Your new link is ready.");
+    await loadCollection();
+  } catch (error) {
+    $("form-error").textContent = error.message;
+    $("form-error").hidden = false;
+  } finally {
+    state.creating = false;
+    $("shorten-button").textContent = "Shorten link ↗";
+    updateSubmit();
+  }
+});
+$("copy-result").addEventListener("click", () =>
+  copyLink($("result-link").href),
+);
+$("refresh").addEventListener("click", () =>
+  state.ready ? loadCollection() : initialize(),
+);
+$("previous").addEventListener("click", () => {
+  state.offset = Math.max(0, state.offset - state.limit);
+  loadCollection();
+});
+$("next").addEventListener("click", () => {
+  state.offset += state.limit;
+  loadCollection();
+});
+let searchTimer;
+$("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.query = $("search").value;
+    state.offset = 0;
+    if (state.ready) loadCollection();
+  }, 250);
+});
+$("modal-close").addEventListener("click", () => $("stats-modal").close());
+$("cancel-delete").addEventListener("click", () => $("delete-modal").close());
+$("confirm-delete").addEventListener("click", async () => {
+  if (!state.pendingDelete) return;
+  $("confirm-delete").disabled = true;
+  try {
+    const code = state.pendingDelete.short_code;
+    await api(`/urls/${encodeURIComponent(code)}`, { method: "DELETE" });
+    $("delete-modal").close();
+    if ($("result-link").href.endsWith(`/${code}`)) $("result").hidden = true;
+    state.pendingDelete = null;
+    toast("Link deleted.");
+    await loadCollection();
+  } catch (error) {
+    $("delete-modal").close();
+    toast(error.message, true);
+  } finally {
+    $("confirm-delete").disabled = false;
+  }
+});
+window.addEventListener("focus", () => {
+  if (state.ready && !state.loading) loadCollection();
+});
+initialize();

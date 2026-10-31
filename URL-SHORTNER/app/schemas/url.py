@@ -1,34 +1,24 @@
-"""Request and response schemas for URLs."""
-
-from __future__ import annotations
+"""Public request and response contracts."""
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UrlCreate(BaseModel):
-    """Incoming payload for URL shortening."""
-
-    url: str = Field(..., description="Original URL to shorten")
-    ttl_seconds: int | None = Field(
-        default=None,
-        ge=1,
-        description="Optional time to live in seconds; omit for no expiry",
-    )
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1, max_length=2048)
+    ttl_seconds: int | None = Field(default=None, ge=1, le=31_536_000, strict=True)
 
 
 class ShortenResponse(BaseModel):
-    """Response payload for URL creation."""
-
     short_code: str
     short_url: str
-    expires_at: datetime | None = None
+    expires_at: datetime | None
 
 
 class UrlStatsResponse(BaseModel):
-    """Analytics payload for a shortened URL."""
-
+    model_config = ConfigDict(from_attributes=True)
     original_url: str
     short_code: str
     clicks: int
@@ -37,23 +27,23 @@ class UrlStatsResponse(BaseModel):
     last_accessed: datetime | None
 
 
-class HealthResponse(BaseModel):
-    """Health check response."""
-
-    status: str
-
-
-class ErrorResponse(BaseModel):
-    """Standard error response."""
-
-    detail: str
-
-class UrlListItem(BaseModel):
-    """Item representing a shortened URL in the recent URLs list."""
-
-    short_code: str
-    original_url: str
+class UrlListItem(UrlStatsResponse):
     short_url: str
-    created_at: datetime
-    expires_at: datetime | None = None
-    clicks: int
+
+
+class UrlPage(BaseModel):
+    items: list[UrlListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class SummaryResponse(BaseModel):
+    total_links: int
+    total_clicks: int
+    active_links: int
+    expired_links: int
+
+
+class HealthResponse(BaseModel):
+    status: str

@@ -1,69 +1,231 @@
 <!doctype html>
 <html lang="en">
-
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>URL Shortener Dashboard</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-</head>
-
-<body>
-  <main class="shell">
-    <section class="card">
-      <div class="masthead">
-        <p class="eyebrow">URL shortener</p>
-        <span class="status-pill">local build</span>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Create short, shareable links and track every visit in your private browser workspace."
+    />
+    <meta name="theme-color" content="#f5f4f0" />
+    <title>URL Shortener — A little link goes a long way</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="URL Shortener home"
+        ><span class="brand-mark" aria-hidden="true">↗</span> shortener<span
+          class="brand-dot"
+          >.</span
+        ></a
+      >
+      <nav aria-label="Main navigation">
+        <a class="nav-active" href="/">Workspace</a
+        ><a href="/docs" target="_blank" rel="noopener"
+          >API docs <span aria-hidden="true">↗</span></a
+        ><a
+          href="https://github.com/arpitkjaiswal/URLShortener"
+          target="_blank"
+          rel="noopener"
+          >GitHub <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+      <div class="workspace-badge">
+        <span aria-hidden="true"></span> Your browser workspace
       </div>
-
-      <h1>Paste a URL. Get a link. Move on.</h1>
-      <p class="lede">A small service for shortening, redirecting, and tracking links without the usual dashboard
-        clutter.</p>
-
-      <form id="shorten-form" class="form">
-        <label class="label" for="url-input">Original URL</label>
-        <div class="row">
-          <input id="url-input" name="url" type="url" placeholder="https://example.com" required />
-          <button type="submit" disabled>Shorten</button>
+    </header>
+    <main id="main" class="shell">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">LESS LINK. MORE POSSIBILITY.</p>
+          <h1>A little link.<br />A long way.</h1>
+          <p class="lede">
+            Give your big ideas a smaller address.<br />Create, share, and keep
+            an eye on every visit.
+          </p>
         </div>
-        <label class="label" for="ttl-input">Live for (optional)</label>
-        <div class="row ttl-row">
-          <input id="ttl-input" name="ttl_value" type="number" min="1" step="1" placeholder="30" />
-          <select id="ttl-unit" name="ttl_unit" aria-label="TTL unit">
-            <option value="seconds">Seconds</option>
-            <option value="minutes" selected>Minutes</option>
-            <option value="hours">Hours</option>
-            <option value="days">Days</option>
-          </select>
+        <div class="intro-art" aria-hidden="true">
+          <div class="orbit"></div>
+          <span class="art-label">BIG IDEAS, SMALL LINKS</span
+          ><span class="art-link">↗</span>
+          <div class="art-url">https://your-next-big-idea.com</div>
+          <div class="art-short">
+            shortener / <b>7xKp2Qw</b> <span>↗</span>
+          </div>
+          <span class="art-spark">✳</span>
         </div>
-        <p class="field-hint">Leave blank to create a link with no expiry.</p>
-      </form>
-
-      <div id="message" class="message"></div>
-
-      <!-- Recent URLs will be rendered here -->
-      <section id="recent-urls" class="recent-urls"></section>
-
-      <section class="hint">
-        <span>API:</span>
-        <code>POST /api/v1/shorten</code>
       </section>
-    </section>
-  </main>
-
-  <!-- Modal for stats -->
-  <div id="stats-modal" class="modal hidden">
-    <div class="modal-content">
-      <button id="modal-close" class="ghost">Close</button>
-      <h2>URL Stats</h2>
+      <section class="create-panel" aria-labelledby="create-heading">
+        <div class="panel-heading">
+          <div>
+            <span class="section-number">01</span>
+            <h2 id="create-heading">Make it short.</h2>
+          </div>
+          <span class="subtle">Ready when you are</span>
+        </div>
+        <form id="shorten-form">
+          <label for="url-input">Destination URL</label>
+          <div class="input-row">
+            <input
+              id="url-input"
+              name="url"
+              type="url"
+              placeholder="https://example.com/your-next-big-idea"
+              required
+              maxlength="2048"
+              autocomplete="url"
+              aria-describedby="url-hint"
+            /><button
+              id="shorten-button"
+              class="primary"
+              type="submit"
+              disabled
+            >
+              Shorten link <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <div class="form-bottom">
+            <div class="expiry-control">
+              <label for="ttl-input">Expires in</label
+              ><input
+                id="ttl-input"
+                type="number"
+                min="1"
+                max="365"
+                step="1"
+                placeholder="Never"
+                aria-describedby="url-hint"
+              /><select id="ttl-unit" aria-label="Expiry unit">
+                <option value="86400">days</option>
+                <option value="3600">hours</option>
+                <option value="60">minutes</option>
+                <option value="1">seconds</option>
+              </select>
+            </div>
+            <p id="url-hint">Optional. Leave blank for a link that lasts.</p>
+          </div>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+        </form>
+        <div id="result" class="result" hidden>
+          <div>
+            <span class="eyebrow">YOUR LINK IS READY</span
+            ><a id="result-link" target="_blank" rel="noopener noreferrer"></a>
+          </div>
+          <button id="copy-result" class="secondary" type="button">
+            Copy link
+          </button>
+        </div>
+      </section>
+      <section class="metrics" aria-label="Workspace overview">
+        <article>
+          <span>Total links</span><strong id="total-links">—</strong
+          ><span class="metric-note">Ideas made shareable</span>
+        </article>
+        <article>
+          <span>Total clicks</span><strong id="total-clicks">—</strong
+          ><span class="metric-note">Visits to your destinations</span>
+        </article>
+        <article>
+          <span>Active links</span><strong id="active-links">—</strong
+          ><span class="metric-note"
+            ><i class="dot"></i> Ready to go places</span
+          >
+        </article>
+        <article>
+          <span>Expired links</span><strong id="expired-links">—</strong
+          ><span class="metric-note">Their work here is done</span>
+        </article>
+      </section>
+      <section class="links-panel" aria-labelledby="links-heading">
+        <div class="panel-heading">
+          <div>
+            <span class="section-number">02</span>
+            <h2 id="links-heading">Your link collection</h2>
+            <span id="link-count" class="count">0</span>
+          </div>
+          <button id="refresh" class="text-button" type="button">
+            ↻ Refresh
+          </button>
+        </div>
+        <div class="collection-tools">
+          <label class="search-label" for="search"
+            ><span aria-hidden="true">⌕</span
+            ><input
+              id="search"
+              type="search"
+              placeholder="Find a link or destination…"
+              maxlength="200"
+              aria-label="Search your links" /></label
+          ><span class="subtle">Newest first</span>
+        </div>
+        <p id="list-message" class="list-message" role="status">
+          Opening your workspace…
+        </p>
+        <div id="recent-urls" class="link-list"></div>
+        <div class="pagination">
+          <span id="page-info" class="subtle"></span>
+          <div>
+            <button id="previous" class="secondary" type="button" disabled>
+              ← Previous</button
+            ><button id="next" class="secondary" type="button" disabled>
+              Next →
+            </button>
+          </div>
+        </div>
+      </section>
+      <aside class="privacy-note">
+        <span aria-hidden="true">◈</span>
+        <div>
+          <strong>A space of your own.</strong> Only this browser can manage
+          these links. Share the short URL with anyone.<br /><span
+            >Clearing site cookies or switching browsers creates a new
+            workspace. Save your links before doing so.</span
+          >
+        </div>
+      </aside>
+      <footer>
+        <span>Small links. Thoughtfully built.</span
+        ><a href="/docs">Explore the API <span aria-hidden="true">↗</span></a
+        ><span>Built by Arpit Kumar Jaiswal</span>
+      </footer>
+    </main>
+    <dialog id="stats-modal" aria-labelledby="stats-heading">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">BEHIND THE LINK</p>
+          <h2 id="stats-heading">Link insights</h2>
+        </div>
+        <button
+          id="modal-close"
+          class="icon-button"
+          aria-label="Close insights"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
       <div id="stats-body"></div>
-    </div>
-  </div>
-
-  <!-- Toast container -->
-  <div id="toast-container" class="toast-container"></div>
-
-  <script src="/static/app.js"></script>
-</body>
-
+    </dialog>
+    <dialog id="delete-modal" aria-labelledby="delete-heading">
+      <h2 id="delete-heading">Delete this link?</h2>
+      <p>The short URL will stop working immediately. This cannot be undone.</p>
+      <div class="dialog-actions">
+        <button id="cancel-delete" class="secondary" type="button">
+          Keep link</button
+        ><button id="confirm-delete" class="danger" type="button">
+          Delete link
+        </button>
+      </div>
+    </dialog>
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+    <noscript
+      ><p class="noscript">
+        Enable JavaScript to use the dashboard. The REST API and short-link
+        redirects also work without JavaScript.
+      </p></noscript
+    >
+  </body>
 </html>
