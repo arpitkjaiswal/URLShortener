@@ -1,5 +1,7 @@
 # Linkly · URL Shortener
 
+**Deployed link:** [Open Linkly](https://urlshortener-1-2fnf.onrender.com/#links)
+
 A responsive FastAPI link workspace with Light, Dark, and System themes, custom aliases, campaign links, expiry, QR downloads, bulk shortening, private daily analytics, titles and tags, pause/resume, searchable pagination, CSV export, and private management sessions.
 
 ## What’s new
