@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from math import ceil
 from typing import Any
 from urllib.parse import urljoin
@@ -18,6 +19,14 @@ from app.schemas.url import UrlCreate
 from app.utils.base62 import ALPHABET
 from app.utils.cache import InMemoryCache
 from app.utils.validators import is_valid_url
+
+
+@dataclass(frozen=True, slots=True)
+class RedirectTarget:
+    """Cache only redirect fields, never a detached ORM graph."""
+    original_url: str
+    expires_at: datetime | None
+    is_paused: bool
 
 
 def record_click_task(session_factory: Any, short_code: str) -> None:
@@ -78,7 +87,7 @@ class ShortenerService:
                 self.logger.warning("Collision detected for short code %s, retrying...", short_code)
 
         self.repository.commit()
-        self.cache.set(short_code, url, ttl_seconds=self._cache_ttl_seconds(url, now))
+        self.cache.set(short_code, RedirectTarget(url.original_url, url.expires_at, url.is_paused), ttl_seconds=self._cache_ttl_seconds(url, now))
         self.logger.info("Shortened URL id=%s", url.id)
         return url
 
@@ -89,7 +98,7 @@ class ShortenerService:
 
         cached_url = self.cache.get(short_code)
         if cached_url is not None:
-            if self._is_expired(cached_url, now):
+            if cached_url.is_paused or self._is_expired(cached_url, now):
                 self.cache.delete(short_code)
                 self.logger.warning("Short URL expired: %s", short_code)
                 return None
@@ -100,7 +109,7 @@ class ShortenerService:
             self.logger.warning("Short URL not found or expired: %s", short_code)
             return None
 
-        self.cache.set(short_code, url, ttl_seconds=self._cache_ttl_seconds(url, now))
+        self.cache.set(short_code, RedirectTarget(url.original_url, url.expires_at, url.is_paused), ttl_seconds=self._cache_ttl_seconds(url, now))
         self.logger.debug("Resolved short link")
         return url
 
@@ -118,9 +127,18 @@ class ShortenerService:
         url = self.repository.get_by_short_code(short_code)
         if url is None:
             return None
-        if not is_valid_url(payload.url):
-            raise ValueError('Please enter a valid HTTP or HTTPS destination without embedded credentials.')
-        url.original_url = payload.url.strip()
+        if payload.url is not None:
+            if not is_valid_url(payload.url):
+                raise ValueError('Please enter a valid HTTP or HTTPS destination without embedded credentials.')
+            url.original_url = payload.url.strip()
+        if any(getattr(payload, name) is not None for name in ('title', 'tag', 'is_paused')):
+            from app.db.models import LinkDetails
+            if url.details is None:
+                url.details = LinkDetails(title='', tag='', is_paused=False)
+            for name in ('title', 'tag', 'is_paused'):
+                value = getattr(payload, name)
+                if value is not None:
+                    setattr(url.details, name, value.strip() if isinstance(value, str) else value)
         if 'ttl_seconds' in payload.model_fields_set:
             url.ttl_seconds = payload.ttl_seconds
             url.expires_at = (datetime.now(timezone.utc) + timedelta(seconds=payload.ttl_seconds)

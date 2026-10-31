@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.security import COOKIE_NAME, SESSION_TTL, check_origin, client_key
-from app.schemas.url import LoginRequest, UrlUpdate
+from app.schemas.url import BulkCreate, BulkResult, LibraryPage, LibraryQuery, LoginRequest, UrlUpdate
+from app.services.library import analytics, library_page, list_item
 from app.db.database import get_db
 from app.schemas.url import ErrorResponse, HealthResponse, ShortenResponse, UrlCreate, UrlStatsResponse, UrlListItem
 from app.services.shortener import ShortenerService, record_click_task
@@ -165,6 +166,33 @@ def get_stats(short_code: str, service: ShortenerService = Depends(get_shortener
     )
 
 
+@api_router.get('/library', dependencies=[Depends(require_management)], response_model=LibraryPage)
+def get_library(query: LibraryQuery = Depends(), service: ShortenerService = Depends(get_shortener_service)):
+    return library_page(service, query)
+
+
+@api_router.get('/analytics/{short_code}', dependencies=[Depends(require_management)])
+def get_analytics(short_code: str, service: ShortenerService = Depends(get_shortener_service)):
+    result = analytics(service, short_code)
+    if result is None:
+        raise HTTPException(404, 'Short URL not found')
+    return result
+
+
+@api_router.post('/bulk', dependencies=[Depends(require_management)], response_model=list[BulkResult])
+def bulk_shorten(payload: BulkCreate, request: Request, service: ShortenerService = Depends(get_shortener_service)):
+    results = []
+    for index, destination in enumerate(payload.urls):
+        try:
+            request.app.state.access.limit(('create', client_key(request)), 20)
+            url = service.shorten_url(UrlCreate(url=destination))
+            results.append(BulkResult(index=index, url=destination, short_url=service.build_short_url(url.short_code)))
+        except (ValueError, HTTPException) as error:
+            results.append(BulkResult(index=index, url=destination,
+                                      error=error.detail if isinstance(error, HTTPException) else str(error)))
+    return results
+
+
 # New endpoint: list recent URLs (default limit 20)
 @api_router.get(
     "/urls",
@@ -178,17 +206,8 @@ def list_urls(
     service: ShortenerService = Depends(get_shortener_service),
 ) -> List[UrlListItem]:
     recent = service.repository.list_recent(limit)
-    return [
-        UrlListItem(
-            short_code=u.short_code,
-            original_url=u.original_url,
-            short_url=service.build_short_url(u.short_code),
-            created_at=u.created_at,
-            expires_at=u.expires_at,
-            clicks=u.clicks,
-        )
-        for u in recent
-    ]
+    return [list_item(url, service) for url in recent]
+
 
 @api_router.patch('/urls/{short_code}', dependencies=[Depends(require_management)], response_model=UrlListItem)
 def update_url(short_code: str, payload: UrlUpdate, service: ShortenerService = Depends(get_shortener_service)):
@@ -198,9 +217,7 @@ def update_url(short_code: str, payload: UrlUpdate, service: ShortenerService = 
         raise HTTPException(400, str(error)) from error
     if url is None:
         raise HTTPException(404, 'Short URL not found')
-    return UrlListItem(short_code=url.short_code, original_url=url.original_url,
-                       short_url=service.build_short_url(url.short_code), clicks=url.clicks,
-                       created_at=url.created_at, expires_at=url.expires_at)
+    return list_item(url, service)
 
 
 @api_router.get("/qr/{short_code}", summary="Download a QR code")

@@ -1,6 +1,17 @@
 # Linkly · URL Shortener
 
-A responsive FastAPI link shortener with custom aliases, expiry, QR downloads, click analytics, search, filters, sorting, CSV export, link editing, and private management sessions.
+A responsive FastAPI link workspace with Light, Dark, and System themes, custom aliases, campaign links, expiry, QR downloads, bulk shortening, private daily analytics, titles and tags, pause/resume, searchable pagination, CSV export, and private management sessions.
+
+## What’s new
+
+- **Light / Dark / System:** choose a theme in the header. Only the theme preference is stored locally; System follows your device automatically. Storage-blocked browsers still work.
+- **A complete link library:** search by destination, alias, title, or tag across the entire database. Filter by active, paused, or expired status and tag; sort and navigate 20 links per page. Summary totals cover the entire library. CSV exports the currently displayed page, clearly labelled in the interface.
+- **Titles and tags:** select Edit on a link to give it a memorable name and a tag. These remain private.
+- **Pause / Resume:** temporarily stop redirects without deleting the address, title, or click history. Resuming respects existing expiry; edit expiry separately to reactivate an expired link. Paused links return the same generic 404 as unavailable links.
+- **Batch studio:** authenticated owners can shorten up to 20 destinations per request. Results identify successes and failures individually; only failed rows remain in the input for retry. The batch shares the same creation rate limit as single links. A 16 KiB API payload limit still applies.
+- **Campaign builder:** add optional UTM source, medium, and campaign values before shortening. Existing query parameters and fragments are preserved; supplied UTM values replace only their matching parameters. UTM values are visible in the destination URL.
+- **Private daily analytics:** Insights displays the last 14 UTC days and all-time counts, including paused or expired links. Daily counts begin with this upgrade; older all-time counts remain unchanged. No IP addresses, visitor identifiers, or referrer histories are stored.
+- **Share anywhere:** copy, use the browser’s native share sheet where available, or download a QR code. Share falls back to copying on unsupported browsers.
 
 ## Develop locally
 
@@ -56,9 +67,12 @@ The free `.onrender.com` domain works as-is. An optional custom domain can use `
 - `POST /api/v1/shorten`: `{ "url": "https://example.com", "custom_alias": "hello", "ttl_seconds": 86400 }`. Alias and expiry are optional. Aliases use 3–32 letters, numbers, underscores, or hyphens and are case-sensitive. Reserved aliases and duplicates return an error. Expiry is limited to 10 years.
 - `GET /{short_code}`: redirect and record a click; expired/deleted/unknown links return 404.
 - `GET /api/v1/qr/{short_code}`: SVG QR download without recording a click.
-- `GET /api/v1/urls?limit=50`: recent links, newest first (maximum 50).
+- `GET /api/v1/urls?limit=50`: legacy recent-links API (maximum 50).
+- `GET /api/v1/library`: authenticated paginated library. Query fields: `q` (max 200 chars), `state=all|active|paused|expired`, `tag`, `sort=newest|oldest|clicks`, `page` (1-based), `page_size` (1–50). Returns items, match count, current page, page count, global summary, and up to 100 tag suggestions.
+- `POST /api/v1/bulk`: authenticated `{ "urls": ["https://example.com", "https://example.org"] }`. Returns per-row index, destination, short URL or error. Rows commit independently; successful rows are not rolled back because another destination is invalid. If the connection fails before results arrive, check the library before retrying to avoid duplicates.
+- `GET /api/v1/analytics/{short_code}`: authenticated 14-day UTC daily aggregates and metadata, including paused and expired links.
 - `GET /api/v1/stats/{short_code}`: clicks, creation, expiry, and last access for active links.
-- `PATCH /api/v1/urls/{short_code}`: update destination and optionally reset expiry (`ttl_seconds: null` removes expiry; omit it to preserve expiry). Keeps the short code and click history.
+- `PATCH /api/v1/urls/{short_code}`: optionally update `url`, `title` (max 120 chars), `tag` (max 40 chars), `is_paused`, and `ttl_seconds`. `ttl_seconds: null` removes expiry; omission preserves expiry. Keeps the short code and click history.
 - `DELETE /api/v1/urls/{short_code}`: permanent deletion with cache invalidation.
 - `GET /health`: database-aware health probe.
 - `POST /api/v1/auth/login`: `{ "key": "your-private-management-key" }` creates a 30-minute browser session.
@@ -67,7 +81,7 @@ The free `.onrender.com` domain works as-is. An optional custom domain can use `
 
 API clients can supply `X-Admin-Token` for protected endpoints. Browser sessions use cookies; session-based writes require an `Origin` header matching the configured public `BASE_URL`. For custom domains, configure `BASE_URL` to match the address used in the browser. Public Swagger/OpenAPI endpoints are disabled; the API contract is documented here.
 
-Dashboard search, totals, and CSV export cover the latest 50 loaded links. Expired links stay visible in the list; active-link insights include last access. QR codes are generated locally by the server, without sending link data to an external QR service. Destination URLs are rendered as text rather than HTML. CSV cells are escaped to avoid spreadsheet formula execution.
+Workspace search and filtering query all stored links; totals cover the entire library, while CSV export covers the currently displayed page. Expired and paused links remain manageable and retain their analytics. QR codes are generated locally by the server, without sending link data to an external QR service. Destination URLs are rendered as text rather than HTML. CSV cells are escaped to avoid spreadsheet formula execution.
 
 ## Privacy and abuse controls
 
@@ -80,4 +94,4 @@ Dashboard search, totals, and CSV export cover the latest 50 loaded links. Expir
 
 ## Scope
 
-This is a single-owner link tool. Account registration, per-user ownership, billing, abuse detection, and distributed rate limiting are not included. Add gateway-level abuse controls before running a high-traffic public shortener. Existing SQLite data is not automatically migrated into Neon PostgreSQL; a new Neon database starts empty. Database table creation is automatic for new deployments; future schema changes should use versioned migrations.
+This is a single-owner link tool. Account registration, per-user ownership, billing, abuse detection, and distributed rate limiting are not included. Add gateway-level abuse controls before running a high-traffic public shortener. Existing SQLite data is not automatically migrated into Neon PostgreSQL; a new Neon database starts empty. On startup, SQLAlchemy adds the `link_details` and `daily_clicks` tables if missing. The existing `urls` table is not rewritten, and existing codes and counts are preserved. Setup is repeatable on SQLite and PostgreSQL. Back up production data before any deployment; future changes to existing columns should use versioned migrations.

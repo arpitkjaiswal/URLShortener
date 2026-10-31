@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import or_, select, update, delete
 from sqlalchemy.orm import Session
 
-from app.db.models import Url
+from app.db.models import Url, LinkDetails, DailyClick
 
 
 class UrlRepository:
@@ -55,6 +55,7 @@ class UrlRepository:
         current_time = now or datetime.now(timezone.utc)
         statement = select(Url).where(
             Url.short_code == short_code,
+            ~Url.details.has(LinkDetails.is_paused.is_(True)),
             or_(Url.expires_at.is_(None), Url.expires_at > current_time),
         )
         return self.session.execute(statement).scalar_one_or_none()
@@ -87,13 +88,28 @@ class UrlRepository:
             update(Url)
             .where(
                 Url.short_code == short_code,
+                ~Url.details.has(LinkDetails.is_paused.is_(True)),
                 or_(Url.expires_at.is_(None), Url.expires_at > updated_at),
             )
             .values(clicks=Url.clicks + 1, last_accessed=updated_at)
+            .returning(Url.id)
         )
-        result = self.session.execute(statement)
+        url_id = self.session.execute(statement).scalar_one_or_none()
+        if url_id is None:
+            return False
+        # Both supported databases provide atomic UPSERT: concurrent clicks cannot lose daily increments.
+        if self.session.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        stmt = insert(DailyClick).values(url_id=url_id, day=updated_at.date(), clicks=1)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[DailyClick.url_id, DailyClick.day],
+            set_={"clicks": DailyClick.clicks + 1},
+        )
+        self.session.execute(stmt)
         self.session.flush()
-        return result.rowcount > 0
+        return True
 
     def commit(self) -> None:
         """Commit the current transaction."""
